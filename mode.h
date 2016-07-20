@@ -166,5 +166,7 @@
   float mode_value_height(void);
   float mode_value_angle(void);
   void mode_values_update(int8_t indent);
+  float mode_normalize_reading(int16_t radio_reading, int16_t center, int16_t dead_zone, int16_t max_value, int16_t min_value, float polarity);
+//  float mode_normalize_reading(int16_t radio_reading, int16_t center, int16_t dead_zone, int16_t max_value, int16_t min_value, float pos_gain, float neg_gain, float polarity);
   
 #endif

@@ -179,9 +179,10 @@ void mode_create_sequences(int8_t indent) {
   // when beginning to walk the rear foot start position should be -F_RDY and the end position will be - F_RAD
   // when beginning to walk the front foot start position should be F_RDY and the end position will be F_STP = M_STD - F_RAD
   static const float F_RAD = 40.0; // foot radius, can't put two feet in the same place so use this to make sure they're at separated locations
-  static const float H_STD = F_RDY - F_RAD; // max half stride = the foot ready position minus the foot radius
-  static const float F_STD = 2.00 * H_STD; // full stride = 2.0 * (the foot ready position minus the foot radius)
-  static const float Q_STD = 0.50 * H_STD; // body stride of 1 step !!! this should be 1/3 of full stride !!!
+  static const float H_STD = F_RDY - F_RAD; // max half stride = the foot ready position minus the foot radius 
+  static const float F_STD = 2.00 * H_STD; // full stride = 2.0 * (the foot ready position minus the foot radius) = how far the foot moves ABSOLUTELY
+  static const float Q_STD = 0.50 * H_STD; // 
+//  static const float B_STD = F_STD/3.0; // body stride of 1 step ! this is 1/3 of full stride !
   static const float B0STD = 4.0 * Q_STD / 16.0; // body walk, begin, phase 0 stride
   static const float B1STD = 5.0 * Q_STD / 16.0; // body walk, begin, phase 1 stride
   static const float B2STD = 7.0 * Q_STD / 16.0; // body walk, begin, phase 2 stride
@@ -247,7 +248,7 @@ void mode_create_sequences(int8_t indent) {
   // sequence to start walking    {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
   mode_seq[MODE_WALKING_BEG][0] = {not_last_phase, "beg w 1/3, move body",     {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0, b0vel,   0.0}},  // move body only
                                                                                 {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move rear leg to -F_RAD
+                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
   mode_seq[MODE_WALKING_BEG][1] = {not_last_phase, "beg w 2/3, mov bdy, leg1", {{MODE_PART_BDY_D, {   0.0, B1STD, BZNOM}, {   0.0, b1vel,   0.0}},  // move body forward
                                                                                 {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
                                                                                 {MODE_PART_LEG_1, { F_RDY, F1WBG, F_LFT}, {   0.0,-b1vel,   0.0}}}};// move front leg to -F_RAD
@@ -264,7 +265,7 @@ void mode_create_sequences(int8_t indent) {
                                                                                 {MODE_PART_LEG_3, {-F_RDY, F3WEN, F_LFT}, {   0.0,-b0vel,   0.0}}}};// move front leg to F_RDY
   mode_seq[MODE_WALKING_END][2] = {last_phase, "end walking, stop body",       {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0,   0.0,   0.0}},  // move forward
                                                                                 {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move front leg to F_RDY
+                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
 
   // sequence for walking,    {last_phase, descriptive string,                  {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
   mode_seq[MODE_WALKING][0] = {not_last_phase, "walking, move leg2",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
@@ -1346,9 +1347,18 @@ void mode_execute_move(float current_seq_time, mode_seq_t mode_seq_phase, boolea
 
 //========================================================
 //  mode_create_next_part_parameters
-//    create the next move_part_parameters for each new active seq_part
-//    note: the leg move_parameters are relative to the body center exept for z which will be an amout of up/down motion
-//          the body move parameters are relative to the beginning body center at ground level
+//    create the next move_part_parameters for each new active seq_part using the next_seq_phase and the current information
+//    inputs:
+//      mode_seq_t  next_seq_phase                                          the next sequence  (move)
+//      float       next_part_beg_xyz[MODE_PART_NUM][XYZ]                   the xyz at the active parts of the next phase (move)
+//      float       part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM] the parameters of the current/previous active parts
+//      uint8_t     part_activity_type[MODE_PART_NUM]                       the activity type of the parts of the current/previous move
+//      uint8_t     part_seq_part[MODE_PART_NUM]                            the seq_part index of the parts in the current/previous move
+//    outputs:
+//      float       next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM]
+//      
+//    note: the leg move_parameters are relative to the body center except for z which will be an amount of up/down motion
+//          the body move parameters are relative to the beginning body center except for z which is relative to nominal ground level
 //========================================================
 void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part_beg_xyz[MODE_PART_NUM][XYZ], float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent){
   const static char *routine = "mode_create_next_part_parameters";
@@ -1359,7 +1369,7 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
   static const uint8_t yi = 1; // y index to make code more readable
   static const uint8_t zi = 2; // z index to make code more readable
 
-  // initialize to zeros
+  // initialize next_part_parameters to zeros
   for(uint8_t next_seq_part=0; next_seq_part<MODE_SEQ_PART_NUM; next_seq_part++){
     for(uint8_t coor=0; coor<XYZ; coor++){
       for(uint8_t param=0; param<LEGS_PARAM_NUM; param++){
@@ -1849,7 +1859,7 @@ float mode_value_angle(void){
 void mode_values_update(int8_t indent){
 //  const boolean local_debug = false;
 //  if(!local_debug) indent = -1;
-  LOCAL_DEBUG_DISABLED
+  LOCAL_DEBUG_ENABLED
   if (local_debug){
     DEBUG_PRINT("Beg mode_values_update; DXe: F, VY, VX, VT, H, A: ");
   }
@@ -1865,79 +1875,72 @@ void mode_values_update(int8_t indent){
 
   const int16_t THROTTLE_CENTER = 1024; // should be the center reading of the throttle
   const int16_t THROTTLE_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
-  const float VY_POS_GAIN = 0.01; // move forward at 0.01 mm/sec for 1 usec pulse, minus sign reverses direction
-  const float VY_NEG_GAIN = 0.01; // move backward at 0.01 mm/sec for 1 usec pulse, minus sign reverses direction
-  temp = sbus_channel(SBUS_THROTTLE) - THROTTLE_CENTER;
-  if(temp > THROTTLE_DEAD_ZONE){
-    mode_values.vy = VY_POS_GAIN * float(temp - THROTTLE_DEAD_ZONE);
-  } else if(temp < -THROTTLE_DEAD_ZONE) {
-    mode_values.vy = VY_NEG_GAIN * float(temp + THROTTLE_DEAD_ZONE);
-  } else {
-    mode_values.vy = 0.0;
-  }
+  const int16_t THROTTLE_MAX = 1706; // maximum throttle reading
+  const int16_t THROTTLE_MIN = 342; // minimum throttle reading
+//  const static float THROTTLE_POS_GAIN = +1.0/float(+THROTTLE_MAX-(THROTTLE_CENTER+THROTTLE_DEAD_ZONE)); // full positive = +1.0
+//  const static float THROTTLE_NEG_GAIN = -1.0/float(-THROTTLE_MIN+(THROTTLE_CENTER-THROTTLE_DEAD_ZONE)); // full negative = -1.0
+  const static float THROTTLE_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
+  mode_values.vy = mode_normalize_reading(sbus_channel(SBUS_THROTTLE), THROTTLE_CENTER, THROTTLE_DEAD_ZONE, THROTTLE_MAX, THROTTLE_MIN, THROTTLE_POLARITY);
+//  mode_values.vy = mode_normalize_reading(sbus_channel(SBUS_THROTTLE), THROTTLE_CENTER, THROTTLE_DEAD_ZONE, THROTTLE_MAX, THROTTLE_MIN, THROTTLE_POS_GAIN, THROTTLE_NEG_GAIN, THROTTLE_POLARITY);
+
   const int16_t RUDDER_CENTER = 1024; // should be the center reading of the throttle
   const int16_t RUDDER_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
-  const float VX_POS_GAIN = -0.01; // move right at 0.01 mm/sec for 1 usec pulse, minus sign reverses direction
-  const float VX_NEG_GAIN = -0.01; // move left at 0.01 mm/sec for 1 usec pulse, minus sign reverses direction
-  temp = sbus_channel(SBUS_RUDDER) - RUDDER_CENTER;
-  if(temp > RUDDER_DEAD_ZONE){
-    mode_values.vx = VX_POS_GAIN * float(temp - RUDDER_DEAD_ZONE);
-  } else if(temp < -RUDDER_DEAD_ZONE) {
-    mode_values.vx = VX_NEG_GAIN * float(temp + RUDDER_DEAD_ZONE);
-  } else {
-    mode_values.vx = 0.0;
-  }
+  const int16_t RUDDER_MAX = 1706; // maximum throttle reading
+  const int16_t RUDDER_MIN = 342; // minimum throttle reading
+//  const static float RUDDER_POS_GAIN = +1.0/float(+RUDDER_MAX-(RUDDER_CENTER+RUDDER_DEAD_ZONE)); // full positive = +1.0
+//  const static float RUDDER_NEG_GAIN = -1.0/float(-RUDDER_MIN+(RUDDER_CENTER-RUDDER_DEAD_ZONE)); // full negative = -1.0
+  const static float RUDDER_POLARITY = -1.0; // +1.0 for normal, -1.0 for reversed
+  mode_values.vx = mode_normalize_reading(sbus_channel(SBUS_RUDDER), RUDDER_CENTER, RUDDER_DEAD_ZONE, RUDDER_MAX, RUDDER_MIN, RUDDER_POLARITY);
+//  mode_values.vx = mode_normalize_reading(sbus_channel(SBUS_RUDDER), RUDDER_CENTER, RUDDER_DEAD_ZONE, RUDDER_MAX, RUDDER_MIN, RUDDER_POS_GAIN, RUDDER_NEG_GAIN, RUDDER_POLARITY);
+
   const int16_t AILERON_CENTER = 1024; // should be the center reading of the throttle
   const int16_t AILERON_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
-  const float VT_POS_GAIN = 0.01; // counter clockwise 0.01 radian/sec for 1 usec pulse, minus sign reverses direction 
-  const float VT_NEG_GAIN = 0.01; // clockwise 0.01 radian/sec for 1 usec pulse, minus sign reverses direction
-  temp = sbus_channel(SBUS_AILERON) - AILERON_CENTER;
-  if(temp > AILERON_DEAD_ZONE){
-    mode_values.vt = VT_POS_GAIN * float(temp - AILERON_DEAD_ZONE);
-  } else if(temp < -AILERON_DEAD_ZONE) {
-    mode_values.vt = VT_NEG_GAIN * float(temp + AILERON_DEAD_ZONE);
-  } else {
-    mode_values.vt = 0.0;
-  }
+  const int16_t AILERON_MAX = 1706; // maximum throttle reading
+  const int16_t AILERON_MIN = 342; // minimum throttle reading
+//  const static float AILERON_POS_GAIN = +1.0/float(+AILERON_MAX-(AILERON_CENTER+AILERON_DEAD_ZONE)); // full positive = +1.0
+//  const static float AILERON_NEG_GAIN = -1.0/float(-AILERON_MIN+(AILERON_CENTER-AILERON_DEAD_ZONE)); // full negative = -1.0
+  const static float AILERON_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
+  mode_values.vt = mode_normalize_reading(sbus_channel(SBUS_AILERON), AILERON_CENTER, AILERON_DEAD_ZONE, AILERON_MAX, AILERON_MIN, AILERON_POLARITY);
+//  mode_values.vt = mode_normalize_reading(sbus_channel(SBUS_AILERON), AILERON_CENTER, AILERON_DEAD_ZONE, AILERON_MAX, AILERON_MIN, AILERON_POS_GAIN, AILERON_NEG_GAIN, AILERON_POLARITY);
+
 //  const int16_t AUX3_CENTER = 1024; // should be the center reading of the throttle
 //  const int16_t AUX3_DEAD_ZONE = 32; // amount we'll allow the reading to go above or below center while keeping 0.0 value
 //  const float HEIGHT_POS_GAIN = -0.01; // plus 0.01 mm for 1 usec pulse, minus sign reverses direction
 //  const float HEIGHT_NEG_GAIN = -0.01; // minus 0.01 mm for 1 usec pulse, minus sign reverses direction
-//  temp = sbus_channel(SBUS_AUX3) - AUX3_CENTER;
-//  if(temp > AUX3_DEAD_ZONE){
-//    mode_values.height = HEIGHT_POS_GAIN * float(temp - AUX3_DEAD_ZONE);
-//  } else if(temp < -AUX3_DEAD_ZONE) {
-//    mode_values.height = HEIGHT_NEG_GAIN * float(temp + AUX3_DEAD_ZONE);
-//  } else {
-//    mode_values.height = 0.0;
-//  }
+
   const int16_t ELEVATOR_CENTER = 1024; // should be the center reading of the throttle
   const int16_t ELEVATOR_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
-  const float ANGLE_POS_GAIN = -0.01; // plus 0.01 radian for 1 usec pulse, minus sign reverses direction
-  const float ANGLE_NEG_GAIN = -0.01; // minus 0.01 radian for 1 usec pulse, minus sign reverses direction
-  temp = sbus_channel(SBUS_ELEVATOR) - ELEVATOR_CENTER;
-  if(temp > ELEVATOR_DEAD_ZONE){
-    mode_values.angle = ANGLE_POS_GAIN * float(temp - ELEVATOR_DEAD_ZONE);
-  } else if(temp < -ELEVATOR_DEAD_ZONE) {
-    mode_values.angle = ANGLE_NEG_GAIN * float(temp + ELEVATOR_DEAD_ZONE);
-  } else {
-    mode_values.angle = 0.0;
-  }
+  const int16_t ELEVATOR_MAX = 1706; // maximum throttle reading
+  const int16_t ELEVATOR_MIN = 342; // minimum throttle reading
+//  const static float ELEVATOR_POS_GAIN = +1.0/float(+ELEVATOR_MAX-(ELEVATOR_CENTER+ELEVATOR_DEAD_ZONE)); // full positive = +1.0
+//  const static float ELEVATOR_NEG_GAIN = -1.0/float(-ELEVATOR_MIN+(ELEVATOR_CENTER-ELEVATOR_DEAD_ZONE)); // full negative = -1.0
+  const static float ELEVATOR_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
+  mode_values.angle = mode_normalize_reading(sbus_channel(SBUS_ELEVATOR), ELEVATOR_CENTER, ELEVATOR_DEAD_ZONE, ELEVATOR_MAX, ELEVATOR_MIN, ELEVATOR_POLARITY);
+//  mode_values.angle = mode_normalize_reading(sbus_channel(SBUS_ELEVATOR), ELEVATOR_CENTER, ELEVATOR_DEAD_ZONE, ELEVATOR_MAX, ELEVATOR_MIN, ELEVATOR_POS_GAIN, ELEVATOR_NEG_GAIN, ELEVATOR_POLARITY);
 
-  if(local_debug){
-    DEBUG_PRINT("\t");
-    DEBUG_PRINT(mode_values.fold);
-    DEBUG_PRINT("\t");
-    DEBUG_PRINTF("%7.2f", mode_values.vy);
-    DEBUG_PRINT("\t");
-    DEBUG_PRINTF("%7.2f", mode_values.vx);
-    DEBUG_PRINT("\t");
-    DEBUG_PRINTF("%7.2f", mode_values.vt);
-    DEBUG_PRINT("\t");
-    DEBUG_PRINTF("%7.2f", mode_values.height);
-    DEBUG_PRINT("\t");
-    DEBUG_PRINTF("%7.2f\n", mode_values.angle);
+//  if(local_debug){
+  if(true){
+//    DEBUG_PRINTF("\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
+    Serial.printf("\t%d,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
   }
   
   return;
 } // end mode_values_update
+
+
+//========================================================
+// mode_normalize_reading
+// converts radio values to normalized values in the range -1.0 to +1.0
+//========================================================
+float mode_normalize_reading(int16_t radio_reading, int16_t center, int16_t dead_zone, int16_t max_value, int16_t min_value, float polarity){
+//float mode_normalize_reading(int16_t radio_reading, int16_t center, int16_t dead_zone, int16_t max_value, int16_t min_value, float pos_gain, float neg_gain, float polarity){
+  int16_t temp = radio_reading - center;
+  if(temp > dead_zone){
+    return polarity * min(+1.0, float(temp - dead_zone)/float(max_value-(center+dead_zone)));
+//    return polarity * min(+1.0, pos_gain * float(temp - dead_zone));
+  } else if(temp < -dead_zone) {
+    return polarity * max(-1.0, float(temp + dead_zone)/float((center-dead_zone)-min_value));
+  } else {
+    return 0.0;
+  }
+} // end mode_normalize_reading
