@@ -89,7 +89,7 @@ void loop(){
 //  servo_math_test();
 //  servo_test();
   sbus_update(indent+1);
-  sbus_print_channels();
+//  sbus_print_channels();
   mode_update(indent+1);
 //  body_update();
 //  position_update();

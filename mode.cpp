@@ -1873,56 +1873,45 @@ void mode_values_update(int8_t indent){
   }
 //  Serial.printf("in %s, mode_values.fold: %d\n", __func__, mode_values.fold);
 
-  const int16_t THROTTLE_CENTER = 1024; // should be the center reading of the throttle
+  const int16_t THROTTLE_CENTER = 1031; // should be the center reading of the throttle
   const int16_t THROTTLE_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
   const int16_t THROTTLE_MAX = 1706; // maximum throttle reading
   const int16_t THROTTLE_MIN = 342; // minimum throttle reading
-//  const static float THROTTLE_POS_GAIN = +1.0/float(+THROTTLE_MAX-(THROTTLE_CENTER+THROTTLE_DEAD_ZONE)); // full positive = +1.0
-//  const static float THROTTLE_NEG_GAIN = -1.0/float(-THROTTLE_MIN+(THROTTLE_CENTER-THROTTLE_DEAD_ZONE)); // full negative = -1.0
   const static float THROTTLE_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
   mode_values.vy = mode_normalize_reading(sbus_channel(SBUS_THROTTLE), THROTTLE_CENTER, THROTTLE_DEAD_ZONE, THROTTLE_MAX, THROTTLE_MIN, THROTTLE_POLARITY);
-//  mode_values.vy = mode_normalize_reading(sbus_channel(SBUS_THROTTLE), THROTTLE_CENTER, THROTTLE_DEAD_ZONE, THROTTLE_MAX, THROTTLE_MIN, THROTTLE_POS_GAIN, THROTTLE_NEG_GAIN, THROTTLE_POLARITY);
 
-  const int16_t RUDDER_CENTER = 1024; // should be the center reading of the throttle
+  const int16_t RUDDER_CENTER = 1017; // should be the center reading of the throttle
   const int16_t RUDDER_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
   const int16_t RUDDER_MAX = 1706; // maximum throttle reading
   const int16_t RUDDER_MIN = 342; // minimum throttle reading
-//  const static float RUDDER_POS_GAIN = +1.0/float(+RUDDER_MAX-(RUDDER_CENTER+RUDDER_DEAD_ZONE)); // full positive = +1.0
-//  const static float RUDDER_NEG_GAIN = -1.0/float(-RUDDER_MIN+(RUDDER_CENTER-RUDDER_DEAD_ZONE)); // full negative = -1.0
   const static float RUDDER_POLARITY = -1.0; // +1.0 for normal, -1.0 for reversed
   mode_values.vx = mode_normalize_reading(sbus_channel(SBUS_RUDDER), RUDDER_CENTER, RUDDER_DEAD_ZONE, RUDDER_MAX, RUDDER_MIN, RUDDER_POLARITY);
-//  mode_values.vx = mode_normalize_reading(sbus_channel(SBUS_RUDDER), RUDDER_CENTER, RUDDER_DEAD_ZONE, RUDDER_MAX, RUDDER_MIN, RUDDER_POS_GAIN, RUDDER_NEG_GAIN, RUDDER_POLARITY);
 
-  const int16_t AILERON_CENTER = 1024; // should be the center reading of the throttle
+  const int16_t AILERON_CENTER = 1027; // should be the center reading of the throttle
   const int16_t AILERON_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
   const int16_t AILERON_MAX = 1706; // maximum throttle reading
   const int16_t AILERON_MIN = 342; // minimum throttle reading
-//  const static float AILERON_POS_GAIN = +1.0/float(+AILERON_MAX-(AILERON_CENTER+AILERON_DEAD_ZONE)); // full positive = +1.0
-//  const static float AILERON_NEG_GAIN = -1.0/float(-AILERON_MIN+(AILERON_CENTER-AILERON_DEAD_ZONE)); // full negative = -1.0
   const static float AILERON_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
   mode_values.vt = mode_normalize_reading(sbus_channel(SBUS_AILERON), AILERON_CENTER, AILERON_DEAD_ZONE, AILERON_MAX, AILERON_MIN, AILERON_POLARITY);
-//  mode_values.vt = mode_normalize_reading(sbus_channel(SBUS_AILERON), AILERON_CENTER, AILERON_DEAD_ZONE, AILERON_MAX, AILERON_MIN, AILERON_POS_GAIN, AILERON_NEG_GAIN, AILERON_POLARITY);
 
 //  const int16_t AUX3_CENTER = 1024; // should be the center reading of the throttle
 //  const int16_t AUX3_DEAD_ZONE = 32; // amount we'll allow the reading to go above or below center while keeping 0.0 value
 //  const float HEIGHT_POS_GAIN = -0.01; // plus 0.01 mm for 1 usec pulse, minus sign reverses direction
 //  const float HEIGHT_NEG_GAIN = -0.01; // minus 0.01 mm for 1 usec pulse, minus sign reverses direction
 
-  const int16_t ELEVATOR_CENTER = 1024; // should be the center reading of the throttle
+  const int16_t ELEVATOR_CENTER = 1022; // should be the center reading of the throttle
   const int16_t ELEVATOR_DEAD_ZONE = 16; // amount we'll allow the reading to go above or below center while keeping 0.0 value
   const int16_t ELEVATOR_MAX = 1706; // maximum throttle reading
   const int16_t ELEVATOR_MIN = 342; // minimum throttle reading
-//  const static float ELEVATOR_POS_GAIN = +1.0/float(+ELEVATOR_MAX-(ELEVATOR_CENTER+ELEVATOR_DEAD_ZONE)); // full positive = +1.0
-//  const static float ELEVATOR_NEG_GAIN = -1.0/float(-ELEVATOR_MIN+(ELEVATOR_CENTER-ELEVATOR_DEAD_ZONE)); // full negative = -1.0
   const static float ELEVATOR_POLARITY = +1.0; // +1.0 for normal, -1.0 for reversed
   mode_values.angle = mode_normalize_reading(sbus_channel(SBUS_ELEVATOR), ELEVATOR_CENTER, ELEVATOR_DEAD_ZONE, ELEVATOR_MAX, ELEVATOR_MIN, ELEVATOR_POLARITY);
-//  mode_values.angle = mode_normalize_reading(sbus_channel(SBUS_ELEVATOR), ELEVATOR_CENTER, ELEVATOR_DEAD_ZONE, ELEVATOR_MAX, ELEVATOR_MIN, ELEVATOR_POS_GAIN, ELEVATOR_NEG_GAIN, ELEVATOR_POLARITY);
 
-//  if(local_debug){
-  if(true){
-//    DEBUG_PRINTF("\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
-    Serial.printf("\t%d,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
+  if(local_debug){
+    DEBUG_PRINTF("\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
   }
+//  if(true){
+//    Serial.printf("\t%d,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f,\t%7.2f\n", mode_values.fold, mode_values.vy, mode_values.vx, mode_values.vt, mode_values.height, mode_values.angle);
+//  }
   
   return;
 } // end mode_values_update
