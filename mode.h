@@ -9,9 +9,10 @@
   #include "legs.h"
 
   struct mode_phase_s {
-    uint8_t alternate; // above a mode, for example am I moving the right or left side? this will alternate with each succesive mode
     uint8_t mode; // the mode of action
     uint8_t direction; // plus or minus (forward/backward, right/left, counterclockwise/clockwise, unfolding/folding?)
+    uint8_t alternate; // 0 or 1, for example am I moving the right or left side? this will alternate with each succesive mode
+    float vel[XYZ]; // the velocities for x, y, z (walking, sidestepping, turning)
     uint8_t phase; // the phase within a mode, for example a walking phase consists of moving a rear foot, then a front foot on the same side
     uint32_t start_time; // millis() at the start of the phase, unsigned long;
     uint32_t end_time; // what millis() should be at the end, calculated when calculating move_points, unsigned long;
@@ -28,6 +29,14 @@
     float angle; // camera angle (future)
   };
   typedef struct mode_values_s mode_values_t;
+
+  struct mode_seq_part2_s {
+    uint8_t part_id; // LEG0, LEG1, LEG2, LEG3, BODY, NONE
+    float nom[XYZ]; // xyz nom displacement/distance 
+    float scl[XYZ]; // xyz scaled with velocity displacement/distance 
+    float v[XYZ]; // ending velocity, if the part is the body it is an absolute velocity, if the part is a leg the velocity is relative to the body reference frame
+  };
+  typedef struct mode_seq_part2_s mode_seq_part2_t;
 
   struct mode_seq_part_s {
     uint8_t part_id; // LEG0, LEG1, LEG2, LEG3, BODY, NONE
@@ -68,12 +77,12 @@
   //const static uint8_t MODE_SEQ_PART_NUM = 3;
   const String MODE_SEQ_PART_NAME[MODE_SEQ_PART_NUM+1] = {"SEQ_PART_0", "SEQ_PART_1", "SEQ_PART_2", "SEQ_PART_X"};
   
-  struct mode_seq_s {
+  struct mode_seq2_s {
     boolean last_phase; // true if this is the last phase of a move sequence
     String phase_name; // this is descriptive but the last phase name MUST begin with 
-    mode_seq_part_t part[MODE_SEQ_PART_NUM];
+    mode_seq_part2_t part[MODE_SEQ_PART_NUM];
   };
-  typedef struct mode_seq_s mode_seq_t;
+  typedef struct mode_seq2_s mode_seq2_t;
 
 
   const static uint8_t MODE_FOLDED = 0;
@@ -127,7 +136,7 @@
   void mode_initialize_parts(int8_t indent);
   void mode_create_sequences(int8_t indent);
   void mode_print_sequences(int8_t indent);
-  void mode_print_sequence(mode_seq_t this_mode_seq, int8_t indent);
+  void mode_print_sequence(mode_seq2_t this_mode_seq, int8_t indent);
   float mode_calc_step_time(float step_x, float step_y, float lift_height, int8_t indent);
   void mode_update(int8_t indent);
   void mode_check_new_mode(int8_t indent);
@@ -141,20 +150,23 @@
   void mode_print_part_parameters(const char *text, float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent);
   void mode_print_parts_xyz(const char *text, float part_xyz[MODE_PART_NUM][XYZ], int8_t indent);
   void mode_print_parts_activity_seq_part(const char *text, uint8_t part_activity[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], int8_t indent);
-  void mode_update_move_part_data(uint8_t new_mode, uint8_t new_mode_dir, uint8_t new_phase, int8_t indent);
-  void mode_create_new_seq_phase(mode_seq_t *new_seq_phase, uint8_t new_mode, uint8_t new_dir, uint8_t new_phase, int8_t indent);
-  void mode_execute_move(float current_seq_time, mode_seq_t mode_seq_phase, boolean *move_done, int8_t indent);
-  void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part_beg_xyz[MODE_PART_NUM][XYZ], float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent);
-  void mode_create_next_part_activity_seq_part(mode_seq_t next_seq_phase, uint8_t next_part_activity[MODE_PART_NUM], uint8_t next_part_seq_part[MODE_PART_NUM], int8_t indent);
-  void mode_create_next_part_beg_xyz(mode_seq_t next_seq_phase, float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float part_beg_xyz[MODE_PART_NUM][XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], int8_t indent);
+  void mode_update_move_part_data(uint8_t new_mode, uint8_t new_mode_dir, float new_mode_vel[XYZ], uint8_t new_phase, int8_t indent);
+  void mode_create_new_seq_phase(mode_seq2_t *new_seq_phase, uint8_t new_mode, uint8_t new_dir, uint8_t new_phase, int8_t indent);
+  void mode_execute_move(float current_seq_time, mode_seq2_t mode_seq_phase, boolean *move_done, int8_t indent);
+  void mode_create_next_part_parameters(mode_seq2_t next_seq_phase, float next_vel[XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent);
+  void mode_create_next_part_activity_seq_part(mode_seq2_t next_seq_phase, uint8_t next_part_activity[MODE_PART_NUM], uint8_t next_part_seq_part[MODE_PART_NUM], int8_t indent);
+  void mode_create_next_part_beg_xyz(mode_seq2_t next_seq_phase, float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float part_beg_xyz[MODE_PART_NUM][XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], int8_t indent);
 //  void mode_set_folded(int8_t indent);
 //  void mode_set_ready(int8_t indent);
 //  void mode_set_dir(uint8_t newdir, int8_t indent);
-  void mode_set_next(uint8_t new_mode, uint8_t new_mode_dir, int8_t indent);
+  void mode_set_next(uint8_t new_mode, uint8_t new_mode_dir, float new_mode_vel[XYZ], int8_t indent);
   uint8_t mode_next_mode(void);
   uint8_t mode_next_dir(void);
+  float mode_next_vel_x(void);
+  float mode_next_vel_y(void);
+  float mode_next_vel_z(void);
   void mode_shut_down(int8_t indent);
-  void mode_set(uint8_t new_mode, uint8_t new_mode_dir, uint8_t new_mode_phase, int8_t indent);
+  void mode_set(uint8_t new_mode, uint8_t new_mode_dir, float next_vel[XYZ], uint8_t new_mode_phase, int8_t indent);
   mode_phase_t mode_mode_phase_get(void);
   uint8_t mode_mode_get(void);
   uint8_t mode_phase_get(void);

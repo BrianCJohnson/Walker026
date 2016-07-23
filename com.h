@@ -55,5 +55,9 @@
 //  void com_err_msg(const char routine[], const char err_msg[], uint8_t uint8_t_value);
 //  void com_err_msg(const char routine[], const char err_msg[], float float_value);
   void com_err_msg(const char routine[], const char err_msg[], uint8_t uint8_t_value, float float_value);
+  boolean com_batt_low(int8_t indent);
+  void com_LED_setup(int8_t indent);
+  void com_LED_on(int8_t indent);
+  void com_LED_off(int8_t indent);
 
 #endif

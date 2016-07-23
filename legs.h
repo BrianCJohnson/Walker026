@@ -87,15 +87,15 @@
                                          {0.5, 1.5},
                                          {0.5, 1.5}}; // angular velocity and acceleration max
 
-  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{1000.0, 4000.0},
-                                         {1000.0, 4000.0},
-                                         {1000.0, 2000.0}}; // linear velocity and acceleration max
+//  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{1000.0, 4000.0},
+//                                         {1000.0, 4000.0},
+//                                         {1000.0, 2000.0}}; // linear velocity and acceleration max
 //  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{640.0, 320.0},
 //                                         {640.0, 320.0},
 //                                         {640.0, 320.0}}; // linear velocity and acceleration max
-//  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{320.0, 160.0},
-//                                         {320.0, 160.0},
-//                                         {320.0, 160.0}}; // linear velocity and acceleration max
+  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{320.0, 160.0},
+                                         {320.0, 160.0},
+                                         {320.0, 160.0}}; // linear velocity and acceleration max
 //  const float LEGS_XYZ_VA_MAX[XYZ][2] = {{160.0, 80.0},
 //                                         {160.0, 80.0},
 //                                         {160.0, 80.0}}; // linear velocity and acceleration max
