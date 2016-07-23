@@ -13,7 +13,8 @@
 
 mode_phase_t mode_phase; // mode and phase
 mode_values_t mode_values;  // commands from radio [fold, vx, vy, vt, height, angle]
-mode_seq_t mode_seq[MODE_NUM][MODE_PHASE_MAX_NUM]; // mode phase sequences (end of move xyz position and velocities)
+mode_seq2_t mode_seq2[MODE_NUM][MODE_PHASE_MAX_NUM]; // mode phase sequences (end of move xyz position and velocities)
+//mode_seq_t mode_seq[MODE_NUM][MODE_PHASE_MAX_NUM]; // mode phase sequences (end of move xyz position and velocities)
 float move_part_points[MODE_SEQ_PART_NUM][XYZ][LEGS_MOVE_POINT_NUM][LEGS_MOVE_TD_NUM]; // move points for moving parts
 float move_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM]; // parameters for each of the part move
 float move_part_xyz[MODE_PART_NUM][XYZ]; // xyz coordinates of each part (each leg and the body) or xyz angle of BDY_A
@@ -22,6 +23,7 @@ uint8_t move_part_activity[MODE_PART_NUM]; // updated between move sequences, in
 uint8_t move_part_seq_part[MODE_PART_NUM]; // updated between move sequences, indicates which seq_part (if any) is associated with the part
 uint8_t gmode_next_mode; // may be none or a commanded mode, set in mode_check_new_mode
 uint8_t gmode_next_dir; // used in conjunction with mode_next_mode above, also set in mode_check_new_mode
+float gmode_next_vel[XYZ]; // used in conjunction with mode_next_mode above, also set in mode_check_new_mode
 //float move_part_v_end
 
 
@@ -37,7 +39,8 @@ void mode_setup(int8_t indent) {
   mode_create_sequences(indent+1); // create the sequences that will be used over and over
   mode_initialize_parts(indent+1); // sets all of the move_part_xyz[MODE_PART_NUM][XYZ] and move_part_beg_xyz[MODE_PART_NUM][XYZ]
   uint8_t new_phase = 0;
-  mode_set(MODE_FOLDED, MODE_DIR_NONE, new_phase, indent+1); // do this after everything else is set up
+  float new_vel[XYZ];
+  mode_set(MODE_FOLDED, MODE_DIR_NONE, new_vel, new_phase, indent+1); // do this after everything else is set up
   mode_phase.start_time = millis();
   //mode_phase.end_time = mode_phase.start_time + 100; // give it 1/10 sec 
   mode_phase.end_time = mode_phase.start_time; 
@@ -188,10 +191,19 @@ void mode_create_sequences(int8_t indent) {
   static const float B2STD = 7.0 * Q_STD / 16.0; // body walk, begin, phase 2 stride
   static const float F1WLK = -F_RAD; // position relative to body, foot 1 end = minus foot radius
   static const float F0WLK = 2.0*F_RDY -F_RAD - Q_STD; // position relative to body, foot 0 walk = 2* foot ready - foot radius - body stride
+  // = F_RDY + vy * Q_STD
   static const float F1WBG = -F_RAD - (B0STD + B1STD); // position relative to body, foot 1 walk beg = - foot radius - body stride
+//  static const float F1WBG = -F_RDY + vy * (H_STD - (B0STD + B1STD)); // position relative to body, foot 1 walk beg = - foot radius - body stride
+  static const float F1WBGS = H_STD - (B0STD + B1STD); // position relative to body, foot 1 walk beg = - foot radius - body stride
   static const float F0WBG = 2.0*F_RDY -F_RAD -(B0STD + B1STD + B2STD); // position relative to body, foot 0 walk beg = 2* foot ready - foot radius - half body stride
+//  static const float F0WBG = F_RDY + vy * (H_STD -(B0STD + B1STD + B2STD)); // position relative to body, foot 0 walk beg = 2* foot ready - foot radius - half body stride
+  static const float F0WBGS = H_STD -(B0STD + B1STD + B2STD); // position relative to body, foot 0 walk beg = 2* foot ready - foot radius - half body stride
   static const float F2WEN = -F_RDY +(B0STD + B1STD); // position relative to body, foot 2 walk end = - foot radius - body stride
+//  static const float F2WEN = -F_RDY + vy * (B0STD + B1STD); // position relative to body, foot 2 walk end = - foot radius - body stride
+  static const float F2WENS = B0STD + B1STD; // position relative to body, foot 2 walk end = - foot radius - body stride
   static const float F3WEN =  F_RDY +(B0STD); // position relative to body, foot 3 walk end = 2* foot ready - foot radius - half body stride
+//  static const float F3WEN =  F_RDY + vy * (B0STD); // position relative to body, foot 3 walk end = 2* foot ready - foot radius - half body stride
+  static const float F3WENS =  B0STD; // position relative to body, foot 3 walk end = 2* foot ready - foot radius - half body stride
   // call legs_coor_move_points() with the active leg step to see how long it takes to move a foot F_STP and then b_vel = B_STP / TIME
   step_time = mode_calc_step_time(0.0, F_STD, F_LFT, indent+1);
   static float b_vel = Q_STD / step_time; // body velocity, ??? Placeholder, will be scaled up later
@@ -227,177 +239,352 @@ void mode_create_sequences(int8_t indent) {
   // body positions are relative to the body position at the start of the move for x and y, but z is absolute
   // active leg positions x, y are relative to the body position at the end of the move, but z is just used for the leg lift amount
   // the body end velocities are absolute, the leg end velocities are relative to the body
-  static const boolean last_phase = true;
-  static const boolean not_last_phase = false;
+  static const boolean lp_ = true;
+  static const boolean nlp = false;
 
-  // sequence for shut down {last_phase, descriptive string,                    {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_SHUT_DOWN][0] = {last_phase, "shut down",                      {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence for shut down {lp_, descriptive string,                 {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_SHUT_DOWN][0] = {lp_, "shut down",                  {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence for folded     {last_phase, descriptive string,                   {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_FOLDED][0] = {last_phase, "folded",                            {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence for folded     {lp_, descriptive string,                {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_FOLDED][0] = {lp_, "folded",                        {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence for ready     {last_phase, descriptive string,                    {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_READY][0] = {last_phase, "ready",                              {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence for ready     {lp_, descriptive string,                 {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_READY][0] = {lp_, "ready",                          {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence to start walking    {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_WALKING_BEG][0] = {not_last_phase, "beg w 1/3, move body",     {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0, b0vel,   0.0}},  // move body only
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
-  mode_seq[MODE_WALKING_BEG][1] = {not_last_phase, "beg w 2/3, mov bdy, leg1", {{MODE_PART_BDY_D, {   0.0, B1STD, BZNOM}, {   0.0, b1vel,   0.0}},  // move body forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F_RDY, F1WBG, F_LFT}, {   0.0,-b1vel,   0.0}}}};// move front leg to -F_RAD
-  mode_seq[MODE_WALKING_BEG][2] = {last_phase, "beg w 3/3, mov bdy, leg0",     {{MODE_PART_BDY_D, {   0.0, B2STD, BZNOM}, {   0.0, b2vel,   0.0}},  // move body forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F_RDY, F0WBG, F_LFT}, {   0.0,-b2vel,   0.0}}}};// move front leg to -F_RAD
+  // sequence to start walking    {lp_, descriptive string,           {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_WALKING_BEG][0] = {nlp, "beg w 1/3, move body",     {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B0STD,   0.0}, {   0.0, b0vel,   0.0}},  // move body only
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
+  mode_seq2[MODE_WALKING_BEG][1] = {nlp, "beg w 2/3, mov bdy, leg1", {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B1STD,   0.0}, {   0.0, b1vel,   0.0}},  // move body forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F_RDY,-F_RDY, F_LFT}, {   0.0,F1WBGS,   0.0}, {   0.0,-b1vel,   0.0}}}};// move front leg to -F_RAD
+  mode_seq2[MODE_WALKING_BEG][2] = {lp_, "beg w 3/3, mov bdy, leg0", {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B2STD,   0.0}, {   0.0, b2vel,   0.0}},  // move body forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F_RDY, F_RDY, F_LFT}, {   0.0,F0WBGS,   0.0}, {   0.0,-b2vel,   0.0}}}};// move front leg to -F_RAD
 
-  // sequence to stop walking     {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_WALKING_END][0] = {not_last_phase, "end walking, move leg2",   {{MODE_PART_BDY_D, {   0.0, B2STD, BZNOM}, {   0.0, b1vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, {-F_RDY, F2WEN, F_LFT}, {   0.0,-b1vel,   0.0}}}};// move rear leg to -F_RDY
-  mode_seq[MODE_WALKING_END][1] = {not_last_phase, "end walking, move leg3",   {{MODE_PART_BDY_D, {   0.0, B1STD, BZNOM}, {   0.0, b0vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, {-F_RDY, F3WEN, F_LFT}, {   0.0,-b0vel,   0.0}}}};// move front leg to F_RDY
-  mode_seq[MODE_WALKING_END][2] = {last_phase, "end walking, stop body",       {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
+  // sequence to stop walking     {lp_, descriptive string,           {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+  mode_seq2[MODE_WALKING_END][0] = {nlp, "end walking, move leg2",   {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B2STD,   0.0}, {   0.0, b1vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, {-F_RDY,-F_RDY, F_LFT}, {   0.0,F2WENS,   0.0}, {   0.0,-b1vel,   0.0}}}};// move rear leg to -F_RDY
+  mode_seq2[MODE_WALKING_END][1] = {nlp, "end walking, move leg3",   {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B1STD,   0.0}, {   0.0, b0vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, {-F_RDY, F_RDY, F_LFT}, {   0.0,F3WENS,   0.0}, {   0.0,-b0vel,   0.0}}}};// move front leg to F_RDY
+  mode_seq2[MODE_WALKING_END][2] = {lp_, "end walking, stop body",   {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, B0STD,   0.0}, {   0.0,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
 
-  // sequence for walking,    {last_phase, descriptive string,                  {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_WALKING][0] = {not_last_phase, "walking, move leg2",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, {-F_RDY, F1WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
-  mode_seq[MODE_WALKING][1] = {not_last_phase, "walking, move leg3",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, {-F_RDY, F0WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
-  mode_seq[MODE_WALKING][2] = {not_last_phase, "walking, move leg1",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F_RDY, F1WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
-  mode_seq[MODE_WALKING][3] = {last_phase, "walking, move leg0",               {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F_RDY, F0WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
+  // sequence for walking,    {lp_, descriptive string,               {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+  mode_seq2[MODE_WALKING][0] = {nlp, "walking, move leg2",           {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, Q_STD,   0.0}, {   0.0, b_vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, {-F_RDY,-F_RDY, F_LFT}, {   0.0, H_STD,   0.0}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
+  mode_seq2[MODE_WALKING][1] = {nlp, "walking, move leg3",           {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, Q_STD,   0.0}, {   0.0, b_vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, {-F_RDY, F_RDY, F_LFT}, {   0.0, Q_STD,   0.0}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
+// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+  mode_seq2[MODE_WALKING][2] = {nlp, "walking, move leg1",           {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, Q_STD,   0.0}, {   0.0, b_vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F_RDY,-F_RDY, F_LFT}, {   0.0, H_STD,   0.0}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
+  mode_seq2[MODE_WALKING][3] = {lp_, "walking, move leg0",           {{MODE_PART_BDY_D, {   0.0,   0.0, BZNOM}, {   0.0, Q_STD,   0.0}, {   0.0, b_vel,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F_RDY, F_RDY, F_LFT}, {   0.0, Q_STD,   0.0}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
 
-  // sequence to start sidestepping     {last_phase, descriptive string,        {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}}, 
-  mode_seq[MODE_SIDESTEPPING_BEG][0] = {not_last_phase, "ss beg 0, move body", {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, { b0vel,   0.0,   0.0}},  // move body only
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move rear leg to -F_RAD
-  mode_seq[MODE_SIDESTEPPING_BEG][1] = {not_last_phase, "ss beg 1, body +leg2",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, { b1vel,   0.0,   0.0}},  // move body forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, { F1WBG,-F_RDY, F_LFT}, {-b1vel,   0.0,   0.0}}}};// move front leg to -F_RAD
-  mode_seq[MODE_SIDESTEPPING_BEG][2] = {last_phase, "ss beg 2, body +leg1",    {{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, { b2vel,   0.0,   0.0}},  // move body forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F0WBG,-F_RDY, F_LFT}, {-b2vel,   0.0,   0.0}}}};// move front leg to -F_RAD
+  // sequence to start sidestepping     {lp_, descriptive string,     {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}}, 
+  mode_seq2[MODE_SIDESTEPPING_BEG][0] = {nlp, "ss beg 0, move body", {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b0vel,   0.0,   0.0}},  // move body only
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move rear leg to -F_RAD
+  mode_seq2[MODE_SIDESTEPPING_BEG][1] = {nlp, "ss beg 1, body +leg2",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b1vel,   0.0,   0.0}},  // move body forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, { F1WBG,-F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b1vel,   0.0,   0.0}}}};// move front leg to -F_RAD
+  mode_seq2[MODE_SIDESTEPPING_BEG][2] = {lp_, "ss beg 2, body +leg1",{{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b2vel,   0.0,   0.0}},  // move body forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F0WBG,-F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b2vel,   0.0,   0.0}}}};// move front leg to -F_RAD
 
-  // sequence for sidestepping,    {last_phase, descriptive string,             {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_SIDESTEPPING][0] = {not_last_phase, "ss, body +leg3",          {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, { F1WLK, F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
-  mode_seq[MODE_SIDESTEPPING][1] = {not_last_phase, "sss, body +leg0",         {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F0WLK, F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
-  mode_seq[MODE_SIDESTEPPING][2] = {not_last_phase, "ss, body leg2",           {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, { F1WLK,-F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
-  mode_seq[MODE_SIDESTEPPING][3] = {last_phase, "ss, body leg1",               {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F0WLK,-F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
+  // sequence for sidestepping,    {lp_, descriptive string,          {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_SIDESTEPPING][0] = {nlp, "ss, body +leg3",          {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b_vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, { F1WLK, F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
+  mode_seq2[MODE_SIDESTEPPING][1] = {nlp, "sss, body +leg0",         {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b_vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F0WLK, F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
+  mode_seq2[MODE_SIDESTEPPING][2] = {nlp, "ss, body leg2",           {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b_vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, { F1WLK,-F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
+  mode_seq2[MODE_SIDESTEPPING][3] = {lp_, "ss, body leg1",           {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b_vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F0WLK,-F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
 
-  // sequence to stop sidestepping     {last_phase, descriptive string,         {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
-  mode_seq[MODE_SIDESTEPPING_END][0] = {not_last_phase, "ss end 0, body +leg3",{{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, { b1vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, { F2WEN, F_RDY, F_LFT}, {-b1vel,   0.0,   0.0}}}};// move rear leg to -F_RDY
-  mode_seq[MODE_SIDESTEPPING_END][1] = {not_last_phase, "ss end 1, body +leg0",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, { b0vel,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F3WEN, F_RDY, F_LFT}, {-b0vel,   0.0,   0.0}}}};// move front leg to F_RDY
-  mode_seq[MODE_SIDESTEPPING_END][2] = {last_phase, "ss end 2, stop body",     {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // move forward
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move front leg to F_RDY
+  // sequence to stop sidestepping     {lp_, descriptive string,      {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},
+  mode_seq2[MODE_SIDESTEPPING_END][0] = {nlp, "ss end 0, body +leg3",{{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b1vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, { F2WEN, F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b1vel,   0.0,   0.0}}}};// move rear leg to -F_RDY
+  mode_seq2[MODE_SIDESTEPPING_END][1] = {nlp, "ss end 1, body +leg0",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, { b0vel,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F3WEN, F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {-b0vel,   0.0,   0.0}}}};// move front leg to F_RDY
+  mode_seq2[MODE_SIDESTEPPING_END][2] = {lp_, "ss end 2, stop body", {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move forward
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move front leg to F_RDY
 
-  // sequence to start rotating,   {last_phase, descriptive string,             {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
-  mode_seq[MODE_ROTATING_BEG][0] = {not_last_phase, "rotating beg 0, bdy",     {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}},  // move body fwd
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING_BEG][1] = {not_last_phase, "rotating beg 1, leg2",    {{MODE_PART_LEG_2, { L2XRB, L2YRB, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg2 right onto circle
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING_BEG][2] = {last_phase, "rotating beg 2, leg1 bdy",    {{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 fwd onto circle
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence to start rotating,   {lp_, descriptive string,          {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},  
+  mode_seq2[MODE_ROTATING_BEG][0] = {nlp, "rotating beg 0, bdy",     {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move body fwd
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING_BEG][1] = {nlp, "rotating beg 1, leg2",    {{MODE_PART_LEG_2, { L2XRB, L2YRB, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move leg2 right onto circle
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING_BEG][2] = {lp_, "rotating beg 2, leg1 bdy",{{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {   0.0,   0.0,   0.0}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 fwd onto circle
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence to rotate,       {last_phase, descriptive string,                 {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
-  mode_seq[MODE_ROTATING][0] = {not_last_phase, "rotating 0, leg0 bdy",        {{MODE_PART_LEG_0, { L0YRB, L0XRB, F_LFT}, { l0yvr,-l0xvr,   0.0}},  // move leg0 ccw around circle
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING][1] = {not_last_phase, "rotating 1, leg3 bdy",        {{MODE_PART_LEG_3, {-L0XRB, L0YRB, F_LFT}, { l0xvr, l0yvr,   0.0}},  // move leg3 ccw around circle
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING][2] = {not_last_phase, "rotating 2, leg2 bdy",        {{MODE_PART_LEG_2, {-L0YRB,-L0XRB, F_LFT}, {-l0yvr, l0xvr,   0.0}},  // move leg2 ccw around circle
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING][3] = {last_phase, "rotating 3, leg 1 bdy",           {{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 ccw around circle
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence to rotate,       {lp_, descriptive string,              {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},  
+  mode_seq2[MODE_ROTATING][0] = {nlp, "rotating 0, leg0 bdy",        {{MODE_PART_LEG_0, { L0YRB, L0XRB, F_LFT}, {   0.0,   0.0,   0.0}, { l0yvr,-l0xvr,   0.0}},  // move leg0 ccw around circle
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING][1] = {nlp, "rotating 1, leg3 bdy",        {{MODE_PART_LEG_3, {-L0XRB, L0YRB, F_LFT}, {   0.0,   0.0,   0.0}, { l0xvr, l0yvr,   0.0}},  // move leg3 ccw around circle
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING][2] = {nlp, "rotating 2, leg2 bdy",        {{MODE_PART_LEG_2, {-L0YRB,-L0XRB, F_LFT}, {   0.0,   0.0,   0.0}, {-l0yvr, l0xvr,   0.0}},  // move leg2 ccw around circle
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING][3] = {lp_, "rotating 3, leg 1 bdy",       {{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {   0.0,   0.0,   0.0}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 ccw around circle
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence to stop rotating,   {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
-  mode_seq[MODE_ROTATING_END][0] = {not_last_phase, "rotating end 0, leg0 bdy",{{MODE_PART_LEG_0, { F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg0 fwd into stance
-                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}},  // rotate body ccw
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING_END][1] = {not_last_phase, "rotating end 1, leg3",    {{MODE_PART_LEG_3, {-F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg3 left into stance
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_ROTATING_END][2] = {last_phase, "rotating end 2, bdy",         {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}},  // move body fwd
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing 
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence to stop rotating,   {lp_, descriptive string,           {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},  
+  mode_seq2[MODE_ROTATING_END][0] = {nlp, "rotating end 0, leg0 bdy",{{MODE_PART_LEG_0, { F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move leg0 fwd into stance
+                                                                      {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // rotate body ccw
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING_END][1] = {nlp, "rotating end 1, leg3",    {{MODE_PART_LEG_3, {-F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move leg3 left into stance
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_ROTATING_END][2] = {lp_, "rotating end 2, bdy",     {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // move body fwd
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing 
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence for unfolding,    {last_phase,     descriptive string,            {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
-  mode_seq[MODE_UNFOLDING][0] = {not_last_phase, "raise body 1/2",             {{MODE_PART_BDY_D, {   0.0,   0.0, BZHAF}, {   0.0,   0.0,  20.0}},  // body: raise 1/2 way up
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_UNFOLDING][1] = {not_last_phase, "raise 2/2, ready ext leg0",  {{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: finish raising, move back
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_UNFOLDING][2] = {not_last_phase, "ext leg0, ready to ext leg1",{{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {   0.0, badjv,   0.0}},  // body: move left & fwd
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F_EXT, F_RDY, F_LFT}, {   0.0,-badjv,   0.0}}}}; // leg0: extend
-  mode_seq[MODE_UNFOLDING][3] = {not_last_phase, "ext leg1, ready to ext leg2",{{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move right & fwd
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F_RDY,-F_EXT, F_LFT}, {-badjv,   0.0,   0.0}}}}; // leg1: extend
-  mode_seq[MODE_UNFOLDING][4] = {not_last_phase, "ext leg2, ready to ext leg3",{{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, {   0.0,-badjv,   0.0}},  // body: move right & back
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, {-F_EXT,-F_RDY, F_LFT}, {   0.0, badjv,   0.0}}}}; // leg2: extend
-  mode_seq[MODE_UNFOLDING][5] = {not_last_phase, "ext leg3, ready to ext leg0",{{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: move left & back
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, {-F_RDY, F_EXT, F_LFT}, { badjv,   0.0,   0.0}}}}; // leg3: extend
-  mode_seq[MODE_UNFOLDING][6] = {last_phase , "center body",                   {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}},  // body: center (fwd)
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence for unfolding,    {lp_,     descriptive string,         {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}},  
+  mode_seq2[MODE_UNFOLDING][0] = {nlp, "raise body 1/2",             {{MODE_PART_BDY_D, {   0.0,   0.0, BZHAF}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,  20.0}},  // body: raise 1/2 way up
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_UNFOLDING][1] = {nlp, "raise 2/2, ready ext leg0",  {{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {-badjv,   0.0,   0.0}},  // body: finish raising, move back
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_UNFOLDING][2] = {nlp, "ext leg0, ready to ext leg1",{{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0, badjv,   0.0}},  // body: move left & fwd
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F_EXT, F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,-badjv,   0.0}}}}; // leg0: extend
+  mode_seq2[MODE_UNFOLDING][3] = {nlp, "ext leg1, ready to ext leg2",{{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, { badjv,   0.0,   0.0}},  // body: move right & fwd
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F_RDY,-F_EXT, F_LFT}, {   0.0,   0.0,   0.0}, {-badjv,   0.0,   0.0}}}}; // leg1: extend
+  mode_seq2[MODE_UNFOLDING][4] = {nlp, "ext leg2, ready to ext leg3",{{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,-badjv,   0.0}},  // body: move right & back
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, {-F_EXT,-F_RDY, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0, badjv,   0.0}}}}; // leg2: extend
+  mode_seq2[MODE_UNFOLDING][5] = {nlp, "ext leg3, ready to ext leg0",{{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {-badjv,   0.0,   0.0}},  // body: move left & back
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, {-F_RDY, F_EXT, F_LFT}, {   0.0,   0.0,   0.0}, { badjv,   0.0,   0.0}}}}; // leg3: extend
+  mode_seq2[MODE_UNFOLDING][6] = {lp_ , "center body",               {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // body: center (fwd)
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
-  // sequence for folding,    {last_phase,     descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}}, 
-  mode_seq[MODE_FOLDING][0] = {not_last_phase, "shift body, ready to ret leg3",{{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move back
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_FOLDING][1] = {not_last_phase, "ret leg3, ready to ret leg2",  {{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, {   0.0, badjv,   0.0}},  // body: move left 
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_3, {-F_RTB, F_RTS, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg0: retract
-  mode_seq[MODE_FOLDING][2] = {not_last_phase, "ret leg2, ready to ret leg1",  {{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: move fwd
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_2, {-F_RTS,-F_RTB, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg1: retract
-  mode_seq[MODE_FOLDING][3] = {not_last_phase, "ret leg1, ready to ret leg0",  {{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {   0.0,-badjv,   0.0}},  // body: move right
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_1, { F_RTB,-F_RTS, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg2: retract
-  mode_seq[MODE_FOLDING][4] = {not_last_phase, "ret leg0, ready to ret leg3",  {{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move back
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_LEG_0, { F_RTS, F_RTB, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg3: retract
-  mode_seq[MODE_FOLDING][5] = {not_last_phase, "center body, start lowering",  {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZHAF}, {   0.0,   0.0, -20.0}},  // body: center, start lowering
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
-  mode_seq[MODE_FOLDING][6] = {last_phase , "finish lowering",                 {{MODE_PART_BDY_D, {   0.0,   0.0, BZLOW}, {   0.0,   0.0,   0.0}},  // body: finish lowering
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
-                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  // sequence for folding,    {lp_,     descriptive string,           {part_id,         { nom x, nom y, nom z}, { scl x, scl y, scl z}, {end_vx, end_vy, end_vz}}, 
+  mode_seq2[MODE_FOLDING][0] = {nlp, "shift body, ready to ret leg3",{{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, { badjv,   0.0,   0.0}},  // body: move back
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_FOLDING][1] = {nlp, "ret leg3, ready to ret leg2",  {{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0, badjv,   0.0}},  // body: move left 
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_3, {-F_RTB, F_RTS, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}}; // leg0: retract
+  mode_seq2[MODE_FOLDING][2] = {nlp, "ret leg2, ready to ret leg1",  {{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {-badjv,   0.0,   0.0}},  // body: move fwd
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_2, {-F_RTS,-F_RTB, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}}; // leg1: retract
+  mode_seq2[MODE_FOLDING][3] = {nlp, "ret leg1, ready to ret leg0",  {{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, {   0.0,-badjv,   0.0}},  // body: move right
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_1, { F_RTB,-F_RTS, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}}; // leg2: retract
+  mode_seq2[MODE_FOLDING][4] = {nlp, "ret leg0, ready to ret leg3",  {{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}, { badjv,   0.0,   0.0}},  // body: move back
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_LEG_0, { F_RTS, F_RTB, F_LFT}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}}; // leg3: retract
+  mode_seq2[MODE_FOLDING][5] = {nlp, "center body, start lowering",  {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZHAF}, {   0.0,   0.0,   0.0}, {   0.0,   0.0, -20.0}},  // body: center, start lowering
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+  mode_seq2[MODE_FOLDING][6] = {lp_ , "finish lowering",             {{MODE_PART_BDY_D, {   0.0,   0.0, BZLOW}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // body: finish lowering
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+                                                                      {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+
+//  // sequence for shut down {last_phase, descriptive string,                    {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_SHUT_DOWN][0] = {last_phase, "shut down",                      {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence for folded     {last_phase, descriptive string,                   {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_FOLDED][0] = {last_phase, "folded",                            {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence for ready     {last_phase, descriptive string,                    {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_READY][0] = {last_phase, "ready",                              {{MODE_PART_NONE_, {   0.0,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence to start walking    {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_WALKING_BEG][0] = {not_last_phase, "beg w 1/3, move body",     {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0, b0vel,   0.0}},  // move body only
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
+//  mode_seq[MODE_WALKING_BEG][1] = {not_last_phase, "beg w 2/3, mov bdy, leg1", {{MODE_PART_BDY_D, {   0.0, B1STD, BZNOM}, {   0.0, b1vel,   0.0}},  // move body forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F_RDY, F1WBG, F_LFT}, {   0.0,-b1vel,   0.0}}}};// move front leg to -F_RAD
+//  mode_seq[MODE_WALKING_BEG][2] = {last_phase, "beg w 3/3, mov bdy, leg0",     {{MODE_PART_BDY_D, {   0.0, B2STD, BZNOM}, {   0.0, b2vel,   0.0}},  // move body forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F_RDY, F0WBG, F_LFT}, {   0.0,-b2vel,   0.0}}}};// move front leg to -F_RAD
+//
+//  // sequence to stop walking     {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+//  mode_seq[MODE_WALKING_END][0] = {not_last_phase, "end walking, move leg2",   {{MODE_PART_BDY_D, {   0.0, B2STD, BZNOM}, {   0.0, b1vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, {-F_RDY, F2WEN, F_LFT}, {   0.0,-b1vel,   0.0}}}};// move rear leg to -F_RDY
+//  mode_seq[MODE_WALKING_END][1] = {not_last_phase, "end walking, move leg3",   {{MODE_PART_BDY_D, {   0.0, B1STD, BZNOM}, {   0.0, b0vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, {-F_RDY, F3WEN, F_LFT}, {   0.0,-b0vel,   0.0}}}};// move front leg to F_RDY
+//  mode_seq[MODE_WALKING_END][2] = {last_phase, "end walking, stop body",       {{MODE_PART_BDY_D, {   0.0, B0STD, BZNOM}, {   0.0,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// do nothing
+//
+//  // sequence for walking,    {last_phase, descriptive string,                  {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+//  mode_seq[MODE_WALKING][0] = {not_last_phase, "walking, move leg2",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, {-F_RDY, F1WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
+//  mode_seq[MODE_WALKING][1] = {not_last_phase, "walking, move leg3",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, {-F_RDY, F0WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
+//// potential body only move inserted here to provide increased stability as ZMP crosses support boundary
+//  mode_seq[MODE_WALKING][2] = {not_last_phase, "walking, move leg1",           {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F_RDY, F1WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move rear leg to -F_RAD
+//  mode_seq[MODE_WALKING][3] = {last_phase, "walking, move leg0",               {{MODE_PART_BDY_D, {   0.0, Q_STD, BZNOM}, {   0.0, b_vel,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F_RDY, F0WLK, F_LFT}, {   0.0,-b_vel,   0.0}}}};// move front leg to F_STP
+//
+//  // sequence to start sidestepping     {last_phase, descriptive string,        {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}}, 
+//  mode_seq[MODE_SIDESTEPPING_BEG][0] = {not_last_phase, "ss beg 0, move body", {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, { b0vel,   0.0,   0.0}},  // move body only
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move rear leg to -F_RAD
+//  mode_seq[MODE_SIDESTEPPING_BEG][1] = {not_last_phase, "ss beg 1, body +leg2",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, { b1vel,   0.0,   0.0}},  // move body forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, { F1WBG,-F_RDY, F_LFT}, {-b1vel,   0.0,   0.0}}}};// move front leg to -F_RAD
+//  mode_seq[MODE_SIDESTEPPING_BEG][2] = {last_phase, "ss beg 2, body +leg1",    {{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, { b2vel,   0.0,   0.0}},  // move body forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F0WBG,-F_RDY, F_LFT}, {-b2vel,   0.0,   0.0}}}};// move front leg to -F_RAD
+//
+//  // sequence for sidestepping,    {last_phase, descriptive string,             {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_SIDESTEPPING][0] = {not_last_phase, "ss, body +leg3",          {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, { F1WLK, F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
+//  mode_seq[MODE_SIDESTEPPING][1] = {not_last_phase, "sss, body +leg0",         {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F0WLK, F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
+//  mode_seq[MODE_SIDESTEPPING][2] = {not_last_phase, "ss, body leg2",           {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, { F1WLK,-F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move rear leg to -F_RAD
+//  mode_seq[MODE_SIDESTEPPING][3] = {last_phase, "ss, body leg1",               {{MODE_PART_BDY_D, { Q_STD,   0.0, BZNOM}, { b_vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F0WLK,-F_RDY, F_LFT}, {-b_vel,   0.0,   0.0}}}};// move front leg to F_STP
+//
+//  // sequence to stop sidestepping     {last_phase, descriptive string,         {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},
+//  mode_seq[MODE_SIDESTEPPING_END][0] = {not_last_phase, "ss end 0, body +leg3",{{MODE_PART_BDY_D, { B2STD,   0.0, BZNOM}, { b1vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, { F2WEN, F_RDY, F_LFT}, {-b1vel,   0.0,   0.0}}}};// move rear leg to -F_RDY
+//  mode_seq[MODE_SIDESTEPPING_END][1] = {not_last_phase, "ss end 1, body +leg0",{{MODE_PART_BDY_D, { B1STD,   0.0, BZNOM}, { b0vel,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F3WEN, F_RDY, F_LFT}, {-b0vel,   0.0,   0.0}}}};// move front leg to F_RDY
+//  mode_seq[MODE_SIDESTEPPING_END][2] = {last_phase, "ss end 2, stop body",     {{MODE_PART_BDY_D, { B0STD,   0.0, BZNOM}, {   0.0,   0.0,   0.0}},  // move forward
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};// move front leg to F_RDY
+//
+//  // sequence to start rotating,   {last_phase, descriptive string,             {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
+//  mode_seq[MODE_ROTATING_BEG][0] = {not_last_phase, "rotating beg 0, bdy",     {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}},  // move body fwd
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING_BEG][1] = {not_last_phase, "rotating beg 1, leg2",    {{MODE_PART_LEG_2, { L2XRB, L2YRB, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg2 right onto circle
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING_BEG][2] = {last_phase, "rotating beg 2, leg1 bdy",    {{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 fwd onto circle
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence to rotate,       {last_phase, descriptive string,                 {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
+//  mode_seq[MODE_ROTATING][0] = {not_last_phase, "rotating 0, leg0 bdy",        {{MODE_PART_LEG_0, { L0YRB, L0XRB, F_LFT}, { l0yvr,-l0xvr,   0.0}},  // move leg0 ccw around circle
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING][1] = {not_last_phase, "rotating 1, leg3 bdy",        {{MODE_PART_LEG_3, {-L0XRB, L0YRB, F_LFT}, { l0xvr, l0yvr,   0.0}},  // move leg3 ccw around circle
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING][2] = {not_last_phase, "rotating 2, leg2 bdy",        {{MODE_PART_LEG_2, {-L0YRB,-L0XRB, F_LFT}, {-l0yvr, l0xvr,   0.0}},  // move leg2 ccw around circle
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING][3] = {last_phase, "rotating 3, leg 1 bdy",           {{MODE_PART_LEG_1, { L0XRB,-L0YRB, F_LFT}, {-l0xvr,-l0yvr,   0.0}},  // move leg1 ccw around circle
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0, bvlrb}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence to stop rotating,   {last_phase, descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
+//  mode_seq[MODE_ROTATING_END][0] = {not_last_phase, "rotating end 0, leg0 bdy",{{MODE_PART_LEG_0, { F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg0 fwd into stance
+//                                                                                {MODE_PART_BDY_A, {   0.0,   0.0, BAROT}, {   0.0,   0.0,   0.0}},  // rotate body ccw
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING_END][1] = {not_last_phase, "rotating end 1, leg3",    {{MODE_PART_LEG_3, {-F_RDY, L_YRE, F_LFT}, {   0.0,   0.0,   0.0}},  // move leg3 left into stance
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_ROTATING_END][2] = {last_phase, "rotating end 2, bdy",         {{MODE_PART_BDY_D, {   0.0, BORBG, BZNOM}, {   0.0,   0.0,   0.0}},  // move body fwd
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing 
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence for unfolding,    {last_phase,     descriptive string,            {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}},  
+//  mode_seq[MODE_UNFOLDING][0] = {not_last_phase, "raise body 1/2",             {{MODE_PART_BDY_D, {   0.0,   0.0, BZHAF}, {   0.0,   0.0,  20.0}},  // body: raise 1/2 way up
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_UNFOLDING][1] = {not_last_phase, "raise 2/2, ready ext leg0",  {{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: finish raising, move back
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_UNFOLDING][2] = {not_last_phase, "ext leg0, ready to ext leg1",{{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {   0.0, badjv,   0.0}},  // body: move left & fwd
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F_EXT, F_RDY, F_LFT}, {   0.0,-badjv,   0.0}}}}; // leg0: extend
+//  mode_seq[MODE_UNFOLDING][3] = {not_last_phase, "ext leg1, ready to ext leg2",{{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move right & fwd
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F_RDY,-F_EXT, F_LFT}, {-badjv,   0.0,   0.0}}}}; // leg1: extend
+//  mode_seq[MODE_UNFOLDING][4] = {not_last_phase, "ext leg2, ready to ext leg3",{{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, {   0.0,-badjv,   0.0}},  // body: move right & back
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, {-F_EXT,-F_RDY, F_LFT}, {   0.0, badjv,   0.0}}}}; // leg2: extend
+//  mode_seq[MODE_UNFOLDING][5] = {not_last_phase, "ext leg3, ready to ext leg0",{{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: move left & back
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, {-F_RDY, F_EXT, F_LFT}, { badjv,   0.0,   0.0}}}}; // leg3: extend
+//  mode_seq[MODE_UNFOLDING][6] = {last_phase , "center body",                   {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZNOM}, {   0.0,   0.0,   0.0}},  // body: center (fwd)
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//
+//  // sequence for folding,    {last_phase,     descriptive string,              {part_id,         {     x,     y,     z}, {end_vx, end_vy, end_vz}}, 
+//  mode_seq[MODE_FOLDING][0] = {not_last_phase, "shift body, ready to ret leg3",{{MODE_PART_BDY_D, {   0.0,-B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move back
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_FOLDING][1] = {not_last_phase, "ret leg3, ready to ret leg2",  {{MODE_PART_BDY_D, { B_ADJ, B_ADJ, BZNOM}, {   0.0, badjv,   0.0}},  // body: move left 
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_3, {-F_RTB, F_RTS, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg0: retract
+//  mode_seq[MODE_FOLDING][2] = {not_last_phase, "ret leg2, ready to ret leg1",  {{MODE_PART_BDY_D, {-B_ADJ, B_ADJ, BZNOM}, {-badjv,   0.0,   0.0}},  // body: move fwd
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_2, {-F_RTS,-F_RTB, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg1: retract
+//  mode_seq[MODE_FOLDING][3] = {not_last_phase, "ret leg1, ready to ret leg0",  {{MODE_PART_BDY_D, {-B_ADJ,-B_ADJ, BZNOM}, {   0.0,-badjv,   0.0}},  // body: move right
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_1, { F_RTB,-F_RTS, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg2: retract
+//  mode_seq[MODE_FOLDING][4] = {not_last_phase, "ret leg0, ready to ret leg3",  {{MODE_PART_BDY_D, { B_ADJ,-B_ADJ, BZNOM}, { badjv,   0.0,   0.0}},  // body: move back
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_LEG_0, { F_RTS, F_RTB, F_LFT}, {   0.0,   0.0,   0.0}}}}; // leg3: retract
+//  mode_seq[MODE_FOLDING][5] = {not_last_phase, "center body, start lowering",  {{MODE_PART_BDY_D, {   0.0, B_ADJ, BZHAF}, {   0.0,   0.0, -20.0}},  // body: center, start lowering
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
+//  mode_seq[MODE_FOLDING][6] = {last_phase , "finish lowering",                 {{MODE_PART_BDY_D, {   0.0,   0.0, BZLOW}, {   0.0,   0.0,   0.0}},  // body: finish lowering
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}},  // do nothing
+//                                                                                {MODE_PART_NONE_, {   0.0,   0.0,   0.0}, {   0.0,   0.0,   0.0}}}};
 
   if (local_debug || true){
     mode_print_sequences(indent+1);
@@ -411,14 +598,14 @@ void mode_create_sequences(int8_t indent) {
 // mode_print_sequences()
 //========================================================
 void mode_print_sequences(int8_t indent){
-  mode_seq_t this_mode_seq;
+  mode_seq2_t this_mode_seq;
   DEBUG_INDENT(indent);
   Serial.println("Beg mode_print_sequences");
   for(uint8_t mode=0; mode<MODE_NUM; mode++){
     for(uint8_t phase=0; phase<MODE_PHASE_MAX_NUM; phase++){
       DEBUG_INDENT(indent+1);
-      Serial.printf("mode_seq[%s][%u]: \n", MODE_NAME[mode].c_str(), phase);
-      this_mode_seq = mode_seq[mode][phase];
+      Serial.printf("mode_seq2[%s][%u]: \n", MODE_NAME[mode].c_str(), phase);
+      this_mode_seq = mode_seq2[mode][phase];
       mode_print_sequence(this_mode_seq, indent+1);
       if(this_mode_seq.last_phase) break;
     }
@@ -431,7 +618,7 @@ void mode_print_sequences(int8_t indent){
 //========================================================
 // mode_print_sequence()
 //========================================================
-void mode_print_sequence(mode_seq_t this_mode_seq, int8_t indent){
+void mode_print_sequence(mode_seq2_t this_mode_seq, int8_t indent){
   DEBUG_INDENT(indent);
   Serial.println("Beg mode_print_sequence");
   DEBUG_INDENT(indent+1);
@@ -441,16 +628,20 @@ void mode_print_sequence(mode_seq_t this_mode_seq, int8_t indent){
     Serial.print("not_last_phase");
   }
   Serial.printf(", %s\n", this_mode_seq.phase_name.c_str());
-  mode_seq_part_t seq_part;
+  mode_seq_part2_t seq_part;
   for(uint8_t seq_part_i=0; seq_part_i<MODE_SEQ_PART_NUM; seq_part_i++){
     seq_part = this_mode_seq.part[seq_part_i];
     DEBUG_INDENT(indent+1);
 //    Serial.print("-\t\t\t\t");
-    Serial.printf("%s D:", MODE_PART_NAME[seq_part.part_id].c_str());
+    Serial.printf("%s nom:", MODE_PART_NAME[seq_part.part_id].c_str());
     for(uint8_t coor=0; coor<XYZ; coor++){
-      Serial.printf(" %7.2f", seq_part.d[coor]);
+      Serial.printf(" %7.2f", seq_part.nom[coor]);
     }
-    Serial.printf(", V:", MODE_PART_NAME[seq_part.part_id].c_str());
+    Serial.printf(", scl:");
+    for(uint8_t coor=0; coor<XYZ; coor++){
+      Serial.printf(" %7.2f", seq_part.scl[coor]);
+    }
+    Serial.printf(", vel:");
     for(uint8_t coor=0; coor<XYZ; coor++){
       Serial.printf(" %7.2f", seq_part.v[coor]);
     }
@@ -525,6 +716,7 @@ void mode_check_new_mode(int8_t indent) {
   uint8_t current_dir = mode_phase.direction; // get the current direction
   uint8_t temp_next_mode;
   uint8_t temp_next_dir;
+  float temp_next_vel[XYZ];
   uint8_t temp_next_phase;
   const static char *routine = "mode_check_new_mode";
   LOCAL_DEBUG_ENABLED  
@@ -541,14 +733,14 @@ void mode_check_new_mode(int8_t indent) {
   if(sbus_panic(indent+1)){
     // panic button has been hit, stop everything immediately with a mode_set
     temp_next_phase = 0;
-    mode_set(MODE_SHUT_DOWN, MODE_DIR_NONE, temp_next_phase, indent+1);
+    mode_set(MODE_SHUT_DOWN, MODE_DIR_NONE, temp_next_vel, temp_next_phase, indent+1);
   } else {
     // not in panic, proceed as normal
     float vy, vx, vt;
-    vy= mode_value_vy();
+    vy = mode_value_vy();
     vx = mode_value_vx();
     vt = mode_value_vt();
-//    Serial.printf("in mode_check_new_mode, vy: %7.2f vx: %7.2f, vt: %7.2f\n", vy, vx, vt);
+    Serial.printf("in mode_check_new_mode, vy: %7.2f vx: %7.2f, vt: %7.2f\n", vy, vx, vt);
     switch (current_mode) {
       case MODE_FOLDED:
       case MODE_FOLDING:
@@ -577,6 +769,9 @@ void mode_check_new_mode(int8_t indent) {
           } else {
             temp_next_dir = MODE_DIR_MINUS;
           }
+          temp_next_vel[0] = 0.5 * vx;
+          temp_next_vel[1] = abs(vy);
+          temp_next_vel[2] = 0.5 * vt;
         } else if(abs(vx) > COM_ZERO) {
           // We're going to sidestep! Which direction though?
           temp_next_mode = MODE_SIDESTEPPING_BEG;
@@ -585,6 +780,9 @@ void mode_check_new_mode(int8_t indent) {
           } else {
             temp_next_dir = MODE_DIR_MINUS;
           }
+          temp_next_vel[0] = abs(vx);
+          temp_next_vel[1] = 0.5 * vy;
+          temp_next_vel[2] = 0.5 * vt;
         } else if(abs(vt) > COM_ZERO) {
           // We're going to rotate! Which direction though?
           temp_next_mode = MODE_ROTATING_BEG;
@@ -593,6 +791,9 @@ void mode_check_new_mode(int8_t indent) {
           } else {
             temp_next_dir = MODE_DIR_MINUS;
           }
+          temp_next_vel[0] = 0.5 * vx;
+          temp_next_vel[1] = 0.5 * vy;
+          temp_next_vel[2] = abs(vt);
         } else {
           temp_next_mode = MODE_READY;
         }
@@ -619,6 +820,9 @@ void mode_check_new_mode(int8_t indent) {
             temp_next_mode = MODE_WALKING_END;
           }
         }
+        temp_next_vel[0] = 0.5 * vx;
+        temp_next_vel[1] = abs(vy);
+        temp_next_vel[2] = 0.5 * vt;
         break;
       case MODE_SIDESTEPPING_BEG:
       case MODE_SIDESTEPPING:
@@ -640,6 +844,9 @@ void mode_check_new_mode(int8_t indent) {
             temp_next_mode = MODE_SIDESTEPPING_END;
           }
         }
+        temp_next_vel[0] = abs(vx);
+        temp_next_vel[1] = 0.5 * vy;
+        temp_next_vel[2] = 0.5 * vt;
         break;
       case MODE_ROTATING_BEG:
       case MODE_ROTATING:
@@ -661,6 +868,9 @@ void mode_check_new_mode(int8_t indent) {
             temp_next_mode = MODE_ROTATING_END;
           }
         }
+        temp_next_vel[0] = 0.5 * vx;
+        temp_next_vel[1] = 0.5 * vy;
+        temp_next_vel[2] = abs(vt);
         break;
       default:
         // the current_mode wasn't accounted for in the above switch/case statment
@@ -672,13 +882,16 @@ void mode_check_new_mode(int8_t indent) {
     // this shouldn't happen as we should always set a valid mode in the above code
     com_err_msg(routine,"temp_next_mode == MODE_NONE");
   }
-
-  mode_set_next(temp_next_mode, temp_next_dir, indent+1);
+  
+  mode_set_next(temp_next_mode, temp_next_dir, temp_next_vel, indent+1);
 //  if (local_debug && true){       
   if (true){       
-    DEBUG_INDENT(indent+1);
+//    DEBUG_INDENT(indent+1);
 //    DEBUG_PRINTF("temp_next_mode: %s, temp_next_dir: %s\n", MODE_NAME[temp_next_mode].c_str(), MODE_DIR_NAME[temp_next_dir].c_str());
+    com_indent(indent+1);
     Serial.printf("temp_next_mode: %s, temp_next_dir: %s\n", MODE_NAME[temp_next_mode].c_str(), MODE_DIR_NAME[temp_next_dir].c_str());
+    com_indent(indent+1);
+    Serial.printf(">>>>6 temp_next_vel[0]: %7.2f, temp_next_vel[1]: %7.2f, temp_next_vel[2]: %7.2f\n", temp_next_vel[0], temp_next_vel[1], temp_next_vel[2]);
   }
   if (local_debug) DEBUG_PRINT_END(routine, indent);
 } // end mode_check_new_mode
@@ -707,9 +920,13 @@ void mode_execute_seq(int8_t indent){
   uint8_t current_dir = mode_phase.direction;
   uint8_t current_phase = mode_phase.phase;
   uint32_t start_time = mode_phase.start_time;
-  // get the current mode sequence phase and parts
-  mode_seq_t mode_seq_phase = mode_seq[current_mode][current_phase];
-  mode_seq_part_t part[2];
+  float current_vel[XYZ];
+  // get the current mode sequence vel, phase and parts
+  for(uint8_t coor=0; coor<XYZ; coor++){ 
+    current_vel[coor] = mode_phase.vel[coor];
+  }
+  mode_seq2_t mode_seq_phase = mode_seq2[current_mode][current_phase];
+  mode_seq_part2_t part[2];
   part[0] = mode_seq_phase.part[0];
   part[1] = mode_seq_phase.part[1];
   uint8_t part0_id = part[0].part_id;
@@ -746,7 +963,9 @@ void mode_execute_seq(int8_t indent){
           DEBUG_PRINTF("mode_seq_phase.last_phase == true, mode_next_mode(): %s, mode_next_dir(): %s\n", MODE_NAME[mode_next_mode()].c_str(), MODE_DIR_NAME[mode_next_dir()].c_str());
         }
         next_phase = 0;
-        mode_set(mode_next_mode(), mode_next_dir(), next_phase, indent+1);
+        float next_vel[XYZ] = {mode_next_vel_x(), mode_next_vel_y(), mode_next_vel_z()};
+        Serial.printf(">>>>5 next_vel[0]: %7.2f, next_vel[1]: %7.2f, next_vel[2]: %7.2f\n", next_vel[0], next_vel[1], next_vel[2]);
+        mode_set(mode_next_mode(), mode_next_dir(), next_vel, next_phase, indent+1);
       } else {
         // not the last phase, go to the next phase, adjust start_time
         if (local_debug){
@@ -759,7 +978,8 @@ void mode_execute_seq(int8_t indent){
           debug_set_new_mode();
         }
         next_phase = current_phase + 1;
-        mode_set(current_mode, current_dir, next_phase, indent+1); // update the data for the next move seq
+        Serial.printf(">>>>4 current_vel[0]: %7.2f, current_vel[1]: %7.2f, current_vel[2]: %7.2f\n", current_vel[0], current_vel[1], current_vel[2]);
+        mode_set(current_mode, current_dir, current_vel, next_phase, indent+1); // update the data for the next move seq
       }
     } else {
       if (local_debug){
@@ -923,10 +1143,10 @@ void mode_print_parts_activity_seq_part(const char *text, uint8_t part_activity[
 // called when there is a mode or phase change
 // will also update mode_phase.start_time and mode_phase.end_time
 //========================================================
-void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, uint8_t new_phase, int8_t indent){
+void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, float new_vel[XYZ], uint8_t new_phase, int8_t indent){
   // use the move_seq to calculate to move parameters and move_points for the active parts in this phase of the move_sequence
   // need to create the move parameters (distance, direction, up_down, v_max, a_max, v_beg, v_end) for each part
-  // mode_seq[mode][phase].part[i] contains part_id, and d[XYZ] and v[XYZ] for each of the two moving parts
+  // mode_seq2[mode][phase].part[i] contains part_id, and d[XYZ] and v[XYZ] for each of the two moving parts
   // float move_part_points[MODE_SEQ_PART_NUM][XYZ][LEGS_MOVE_POINT_NUM][LEGS_MOVE_TD_NUM]; // move points for parts
   //     LEGS_PARAM_NAME[LEGS_PARAM_NUM] = {"DIST", "DIR", "UPDN", "V_MAX", "A_MAX", "V_BEG", "V_END"};
   // need to update the move_part_beg_xyz values
@@ -947,12 +1167,8 @@ void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, uint8_t new_p
   } else {
     // we're not shut down, continue as normal
     // create a variable to hold the next move_seq_phase
-    mode_seq_t next_seq_phase;
-    if(false){
-      next_seq_phase = mode_seq[new_mode][new_phase]; // next_move_seq_phase for this move seq
-    } else {
-      mode_create_new_seq_phase(&next_seq_phase, new_mode, new_dir, new_phase, indent+1); // next_move_seq_phase for this move seq
-    }
+    mode_seq2_t next_seq_phase;
+    mode_create_new_seq_phase(&next_seq_phase, new_mode, new_dir, new_phase, indent+1); // next_move_seq_phase for this move seq
     mode_print_sequence(next_seq_phase, indent+1);
 
     // create temporary versions of next move_part_parameters, move_part_beg_xyz, move_part_activity and move_part_seq_part
@@ -961,7 +1177,8 @@ void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, uint8_t new_p
     uint8_t next_part_activity[MODE_PART_NUM]; // updated between move sequences, indicates the activity and type of each part (the part type: MODE_PART_TYPE_ & {"SUPPORT_LEG", "ACTIVE_LEG", "STATIC_BODY", "ACTIVE_BODY"})
     uint8_t next_part_seq_part[MODE_PART_NUM]; // updated between move sequences, indicates which seq_part (if any) is associated with the part
     mode_create_next_part_beg_xyz(next_seq_phase, move_part_parameters, move_part_activity, move_part_seq_part, move_part_beg_xyz, next_part_beg_xyz, indent+1);
-    mode_create_next_part_parameters(next_seq_phase, next_part_beg_xyz, move_part_parameters, move_part_activity, move_part_seq_part, next_part_parameters, indent+1);
+    Serial.printf(">>>>1 new_vel[0]: %7.2f, new_vel[1]: %7.2f, new_vel[2]: %7.2f\n", new_vel[0], new_vel[1], new_vel[2]);
+    mode_create_next_part_parameters(next_seq_phase, new_vel, next_part_beg_xyz, move_part_parameters, move_part_activity, move_part_seq_part, next_part_parameters, indent+1);
     mode_create_next_part_activity_seq_part(next_seq_phase, next_part_activity, next_part_seq_part, indent+1);
   
     if(local_debug){
@@ -1057,7 +1274,10 @@ void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, uint8_t new_p
     mode_phase.mode = new_mode;
     mode_phase.direction = new_dir;
     mode_phase.phase = new_phase;
-    mode_seq_t new_mode_seq = mode_seq[new_mode][new_phase];
+    for(uint8_t coor=0; coor<XYZ; coor++){
+      mode_phase.vel[coor] = new_vel[coor];
+    }
+    mode_seq2_t new_mode_seq = mode_seq2[new_mode][new_phase];
   }
   if (local_debug){
     mode_print_parts_xyz("move_part_xyz", move_part_xyz, indent+1);
@@ -1077,7 +1297,7 @@ void mode_update_move_part_data(uint8_t new_mode, uint8_t new_dir, uint8_t new_p
 //  creates a new seq_phase that is a reversal of an existing one
 //  used for reversing direction
 //========================================================
-void mode_create_new_seq_phase(mode_seq_t *new_seq_phase, uint8_t new_mode, uint8_t new_dir, uint8_t new_phase, int8_t indent){
+void mode_create_new_seq_phase(mode_seq2_t *new_seq_phase, uint8_t new_mode, uint8_t new_dir, uint8_t new_phase, int8_t indent){
   const static char *routine = "mode_create_new_seq_phase";
   LOCAL_DEBUG_ENABLED
   if (local_debug){
@@ -1154,23 +1374,25 @@ void mode_create_new_seq_phase(mode_seq_t *new_seq_phase, uint8_t new_mode, uint
     }
   }
 
-  new_seq_phase->last_phase = mode_seq[new_mode][new_phase].last_phase;
-  new_seq_phase->phase_name = mode_seq[new_mode][new_phase].phase_name;
+  new_seq_phase->last_phase = mode_seq2[new_mode][new_phase].last_phase;
+  new_seq_phase->phase_name = mode_seq2[new_mode][new_phase].phase_name;
 
   for(uint8_t part=0; part<MODE_SEQ_PART_NUM; part++){
-    mode_seq_part_t seq_part = mode_seq[new_mode][new_phase].part[part];
+    mode_seq_part2_t seq_part = mode_seq2[new_mode][new_phase].part[part];
     if(seq_part.part_id == MODE_PART_BDY_A){
       // it's a body angle move
       new_seq_phase->part[part].part_id = part_map[seq_part.part_id]; // change leg(s) to be moved
       for(uint8_t coor=0; coor<XYZ; coor++){
-        new_seq_phase->part[part].d[coor] = xyz_ang_signs[coor] * seq_part.d[coor]; // reverse angular signs where required
+        new_seq_phase->part[part].nom[coor] = xyz_ang_signs[coor] * seq_part.nom[coor]; // reverse angular signs where required
+        new_seq_phase->part[part].scl[coor] = xyz_ang_signs[coor] * seq_part.scl[coor]; // reverse angular signs where required
         new_seq_phase->part[part].v[coor] = xyz_ang_signs[coor] * seq_part.v[coor]; // reverse angular signs where required
       }      
     } else {
       // for all other part types (body linear and legs), reorder and reverse linear signs
       new_seq_phase->part[part].part_id = part_map[seq_part.part_id]; // change leg(s) to be moved
       for(uint8_t coor=0; coor<XYZ; coor++){
-        new_seq_phase->part[part].d[coor] = xyz_lin_signs[coor] * seq_part.d[coor]; // reverse linear signs where required
+        new_seq_phase->part[part].nom[coor] = xyz_lin_signs[coor] * seq_part.nom[coor]; // reverse linear signs where required
+        new_seq_phase->part[part].scl[coor] = xyz_lin_signs[coor] * seq_part.scl[coor]; // reverse linear signs where required
         new_seq_phase->part[part].v[coor] = xyz_lin_signs[coor] * seq_part.v[coor]; // reverse linear signs where required
       }
     }
@@ -1188,7 +1410,7 @@ void mode_create_new_seq_phase(mode_seq_t *new_seq_phase, uint8_t new_mode, uint
 // use current time and move_points for all parts to calculate its position and move it there
 // move_done will be set true when time >= last time in move, the zero_vel variable will be set to true if velocity is zero
 //========================================================
-void mode_execute_move(float current_seq_time, mode_seq_t mode_seq_phase, boolean *move_done, int8_t indent){
+void mode_execute_move(float current_seq_time, mode_seq2_t mode_seq_phase, boolean *move_done, int8_t indent){
   const static char *routine = "mode_execute_move";
   LOCAL_DEBUG_ENABLED
   if (local_debug){
@@ -1349,7 +1571,7 @@ void mode_execute_move(float current_seq_time, mode_seq_t mode_seq_phase, boolea
 //  mode_create_next_part_parameters
 //    create the next move_part_parameters for each new active seq_part using the next_seq_phase and the current information
 //    inputs:
-//      mode_seq_t  next_seq_phase                                          the next sequence  (move)
+//      mode_seq2_t  next_seq_phase                                          the next sequence  (move)
 //      float       next_part_beg_xyz[MODE_PART_NUM][XYZ]                   the xyz at the active parts of the next phase (move)
 //      float       part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM] the parameters of the current/previous active parts
 //      uint8_t     part_activity_type[MODE_PART_NUM]                       the activity type of the parts of the current/previous move
@@ -1360,7 +1582,7 @@ void mode_execute_move(float current_seq_time, mode_seq_t mode_seq_phase, boolea
 //    note: the leg move_parameters are relative to the body center except for z which will be an amount of up/down motion
 //          the body move parameters are relative to the beginning body center except for z which is relative to nominal ground level
 //========================================================
-void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part_beg_xyz[MODE_PART_NUM][XYZ], float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent){
+void mode_create_next_part_parameters(mode_seq2_t next_seq_phase, float next_vel[XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float next_part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], int8_t indent){
   const static char *routine = "mode_create_next_part_parameters";
   LOCAL_DEBUG_ENABLED
   if (local_debug) DEBUG_PRINT_BEG(routine, indent);
@@ -1379,6 +1601,8 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
   }
   //if(local_debug && (indent>=0)) mode_print_part_parameters("next_part_parameters", next_part_parameters, indent+1);
 
+  Serial.printf(">>>>0 next_vel[0]: %7.2f, next_vel[1]: %7.2f, next_vel[2]: %7.2f\n", next_vel[0], next_vel[1], next_vel[2]);
+
   for(uint8_t next_seq_part=0; next_seq_part<MODE_SEQ_PART_NUM; next_seq_part++){
     // check each of the seq_parts, don't bother with this part if it's not moving
     uint8_t next_part = next_seq_phase.part[next_seq_part].part_id; // this is the actual part index for this seq_part
@@ -1391,12 +1615,13 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
       if(local_debug && (indent>=0)){
         for(uint8_t coor=0; coor<XYZ; coor++){
           DEBUG_INDENT(indent+1);
-          DEBUG_PRINTF("next_seq_phase.part[%d].d[%d]: %7.2f\n", next_seq_part, coor, next_seq_phase.part[next_seq_part].d[coor]); // amount to move this part, either absolute or relative
+          DEBUG_PRINTF("next_seq_phase.part[%d].d[%d]: %7.2f\n", next_seq_part, coor, next_seq_phase.part[next_seq_part].nom[coor]); // amount to move this part, either absolute or relative
 //         DEBUG_PRINTF(", move_part_xyz[next_part][coor]: %7.2f\n", move_part_xyz[next_part][coor]); // current coordinate of part
         }
       }
 
       // First, set DIST and UPDN
+      float test_vel = 0.25;
       for(uint8_t coor=0; coor<XYZ; coor++){
         // for each coordinate store the move parameters for this part
         if((next_part != MODE_PART_BDY_D) && (next_part != MODE_PART_BDY_A)){
@@ -1404,11 +1629,15 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
           // active leg positions x, y are relative to the body position at the start of the mode, but z is just used for the leg lift amount
           if(coor == zi){
             // moving part is a leg and Z coor
-            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].d[coor]; // this is just the lift amount for z
+            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].nom[coor]; // this is just the lift amount for z
             next_part_parameters[next_seq_part][coor][LEGS_PARAM_UPDN] = 1.0; // set to > 0.0 to signify that this is an up/down move for z
           } else {
             // moving part is a leg and X or Y coor
-            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].d[coor] - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
+            float value = next_seq_phase.part[next_seq_part].nom[coor] + test_vel * next_seq_phase.part[next_seq_part].scl[coor];
+//            float value = next_seq_phase.part[next_seq_part].nom[coor] + next_vel[coor] * next_seq_phase.part[next_seq_part].scl[coor];
+            Serial.printf("nom: %7.2f, vel: %7.2f, scl: %7.2f, value: %7.2f\n", next_seq_phase.part[next_seq_part].nom[coor], next_vel[coor], next_seq_phase.part[next_seq_part].scl[coor], value);   
+            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = value - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
+//            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].nom[coor] - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
             next_part_parameters[next_seq_part][coor][LEGS_PARAM_UPDN] = -1.0; // set to < 0.0 to signify that this is NOT an up/down move for z
           }
         } else {
@@ -1416,11 +1645,17 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
           // body positions are relative to the body position at the start of the move for x and y, but z is absolute
           if(coor == zi){
             // coor is z so this is absolute position, dist = next position - current position
-            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].d[coor] - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
+            float value = next_seq_phase.part[next_seq_part].nom[coor] + test_vel * next_seq_phase.part[next_seq_part].scl[coor];
+//            float value = next_seq_phase.part[next_seq_part].nom[coor] + next_vel[coor] * next_seq_phase.part[next_seq_part].scl[coor];
+            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = value - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
+//            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].nom[coor] - next_part_beg_xyz[next_part][coor]; // convert the absolute position of d[XY] to a distance = absolute - current
             next_part_parameters[next_seq_part][coor][LEGS_PARAM_UPDN] = -1.0; // set to < 0.0 to signify that this is NOT an up/down move for z
           } else {
             // coor is x or y so this is the distance to move
-            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].d[coor]; // this is just the amount to move
+            float value = next_seq_phase.part[next_seq_part].nom[coor] + test_vel * next_seq_phase.part[next_seq_part].scl[coor];
+//            float value = next_seq_phase.part[next_seq_part].nom[coor] + next_vel[coor] * next_seq_phase.part[next_seq_part].scl[coor];
+            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = value; // this is just the amount to move
+//            next_part_parameters[next_seq_part][coor][LEGS_PARAM_DIST] = next_seq_phase.part[next_seq_part].nom[coor]; // this is just the amount to move
             next_part_parameters[next_seq_part][coor][LEGS_PARAM_UPDN] = -1.0; // set to < 0.0 to signify that this is NOT an up/down move
           }
         }
@@ -1540,7 +1775,7 @@ void mode_create_next_part_parameters(mode_seq_t next_seq_phase, float next_part
 //========================================================
 //  mode_create_next_part_activity_seq_part
 //========================================================
-void mode_create_next_part_activity_seq_part(mode_seq_t next_seq_phase, uint8_t next_part_activity[MODE_PART_NUM], uint8_t next_part_seq_part[MODE_PART_NUM], int8_t indent){
+void mode_create_next_part_activity_seq_part(mode_seq2_t next_seq_phase, uint8_t next_part_activity[MODE_PART_NUM], uint8_t next_part_seq_part[MODE_PART_NUM], int8_t indent){
   const static char routine[] = "mode_create_next_part_activity_seq_part";
 //  const boolean local_debug = true;
   LOCAL_DEBUG_ENABLED
@@ -1583,7 +1818,7 @@ void mode_create_next_part_activity_seq_part(mode_seq_t next_seq_phase, uint8_t 
 //========================================================
 //  mode_create_next_part_beg_xyz
 //========================================================
-void mode_create_next_part_beg_xyz(mode_seq_t next_seq_phase, float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float part_beg_xyz[MODE_PART_NUM][XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], int8_t indent){
+void mode_create_next_part_beg_xyz(mode_seq2_t next_seq_phase, float part_parameters[MODE_SEQ_PART_NUM][XYZ][LEGS_PARAM_NUM], uint8_t part_activity_type[MODE_PART_NUM], uint8_t part_seq_part[MODE_PART_NUM], float part_beg_xyz[MODE_PART_NUM][XYZ], float next_part_beg_xyz[MODE_PART_NUM][XYZ], int8_t indent){
   // create next_move_part_beg_xyz[MODE_PART_NUM][XYZ] with where they should be at at the end of the move that just finished
   // if the body moved, that will impact the body and all SUPPORT legs (they moved relative to the body because they are at fixed positions on the ground)
   // if any legs were ACTIVE, just use the info from the previous move_points for the ACTIVE legs as that motion is relative to the body
@@ -1706,17 +1941,22 @@ void mode_create_next_part_beg_xyz(mode_seq_t next_seq_phase, float part_paramet
 // mode_set_next
 // save next mode and direction
 //========================================================
-void mode_set_next(uint8_t new_mode, uint8_t new_dir, int8_t indent){
+void mode_set_next(uint8_t new_mode, uint8_t new_dir, float next_vel[XYZ], int8_t indent){
   const static char *routine = "mode_set_next";
   LOCAL_DEBUG_ENABLED
   if(local_debug){
     DEBUG_INDENT(indent);
     DEBUG_PRINTF("Beg %s, new_mode: %s, new_mode_dir: %s\n", routine, MODE_NAME[new_mode].c_str(), MODE_DIR_NAME[new_dir].c_str());
+    DEBUG_INDENT(indent+1);
+    DEBUG_PRINTF("x_vel: %7.2f, y_vel: %7.2f, z_vel: %7.2f,\n", next_vel[0], next_vel[1], next_vel[2]);
     mode_print_current_time(indent+1);
   }
 
   gmode_next_mode = new_mode;
   gmode_next_dir = new_dir;
+  for(uint8_t coor=0; coor<XYZ; coor++){
+    gmode_next_vel[coor] = next_vel[coor];
+  }
   
   if(local_debug){
     DEBUG_PRINT_END(routine, indent);
@@ -1741,19 +1981,44 @@ uint8_t mode_next_dir(void){
 
 
 //========================================================
+// mode_next_vel_x
+//========================================================
+float mode_next_vel_x(void){
+  return gmode_next_vel[0];
+} // end mode_next_vel_x
+
+
+//========================================================
+// mode_next_vel_y
+//========================================================
+float mode_next_vel_y(void){
+  return gmode_next_vel[1];
+} // end mode_next_vel_y
+
+
+//========================================================
+// mode_next_vel_z
+//========================================================
+float mode_next_vel_z(void){
+  return gmode_next_vel[2];
+} // end mode_next_vel_z
+
+
+//========================================================
 // mode_shut_down
 //========================================================
 void mode_shut_down(int8_t indent){
-  mode_set(MODE_SHUT_DOWN, MODE_DIR_PLUS, 0, indent);
+  float vel[XYZ];
+  mode_set(MODE_SHUT_DOWN, MODE_DIR_PLUS, vel, 0, indent);
 } // end mode_shut_down
 
 
 //========================================================
 // mode_set
-// change to new mode, new direction, new phase, update start_time and end_time
+// change to new mode, new direction, new velocity, new phase, update start_time and end_time
 // update mode_move_part_points for new sequence
 //========================================================
-void mode_set(uint8_t new_mode, uint8_t new_mode_dir, uint8_t new_mode_phase, int8_t indent){
+void mode_set(uint8_t new_mode, uint8_t new_mode_dir, float new_mode_vel[XYZ], uint8_t new_mode_phase, int8_t indent){
   const static char routine[] = "mode_set";
 //  const boolean local_debug = true;
   uint8_t current_mode = mode_phase.mode;
@@ -1771,7 +2036,8 @@ void mode_set(uint8_t new_mode, uint8_t new_mode_dir, uint8_t new_mode_phase, in
     mode_print_current_time(indent+1);
   }
 //  uint8_t new_phase = 0;
-  mode_update_move_part_data(new_mode, new_mode_dir, new_mode_phase, indent+1);
+  Serial.printf(">>>>2 new_mode_vel[0]: %7.2f, new_mode_vel[1]: %7.2f, new_mode_vel[2]: %7.2f\n", new_mode_vel[0], new_mode_vel[1], new_mode_vel[2]);
+  mode_update_move_part_data(new_mode, new_mode_dir, new_mode_vel, new_mode_phase, indent+1);
 
   if (local_debug) DEBUG_PRINT_END(routine, indent);
 } // end mode_set
